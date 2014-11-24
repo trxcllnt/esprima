@@ -164,6 +164,7 @@ parseYieldExpression: true, parseAwaitExpression: true
         ExpressionStatement: 'ExpressionStatement',
         ForInStatement: 'ForInStatement',
         ForOfStatement: 'ForOfStatement',
+        ForOnStatement: 'ForOnStatement',
         ForStatement: 'ForStatement',
         FunctionDeclaration: 'FunctionDeclaration',
         FunctionExpression: 'FunctionExpression',
@@ -1867,6 +1868,15 @@ parseYieldExpression: true, parseAwaitExpression: true
             };
         },
 
+        createForOnStatement: function (left, right, body) {
+            return {
+                type: Syntax.ForOnStatement,
+                left: left,
+                right: right,
+                body: body
+            };
+        },
+
         createFunctionDeclaration: function (id, params, defaults, body, rest, generator, expression,
                                              isAsync, returnType, typeParameters) {
             var funDecl = {
@@ -2584,18 +2594,22 @@ parseYieldExpression: true, parseAwaitExpression: true
             };
         },
 
-        createYieldExpression: function (argument, delegate) {
+        createYieldExpression: function (argument, delegate, isAsync, observerId) {
             return {
                 type: Syntax.YieldExpression,
                 argument: argument,
-                delegate: delegate
+                delegate: delegate,
+                async: isAsync,
+                observerId: observerId
             };
         },
 
-        createAwaitExpression: function (argument) {
+        createAwaitExpression: function (argument, delegate, observerId) {
             return {
                 type: Syntax.AwaitExpression,
-                argument: argument
+                argument: argument,
+                delegate: delegate,
+                observerId: observerId
             };
         },
 
@@ -4980,7 +4994,7 @@ parseYieldExpression: true, parseAwaitExpression: true
                 state.allowIn = true;
 
                 if (init.declarations.length === 1) {
-                    if (matchKeyword('in') || matchContextualKeyword('of')) {
+                    if (matchKeyword('in') || matchContextualKeyword('of') || matchContextualKeyword('on')) {
                         operator = lookahead;
                         if (!((operator.value === 'in' || init.kind !== 'var') && init.declarations[0].init)) {
                             lex();
@@ -4995,7 +5009,7 @@ parseYieldExpression: true, parseAwaitExpression: true
                 init = parseExpression();
                 state.allowIn = true;
 
-                if (matchContextualKeyword('of')) {
+                if (matchContextualKeyword('of') || matchContextualKeyword('on')) {
                     operator = lex();
                     left = init;
                     right = parseExpression();
@@ -5046,6 +5060,8 @@ parseYieldExpression: true, parseAwaitExpression: true
 
         if (operator.value === 'in') {
             return markerApply(marker, delegate.createForInStatement(left, right, body));
+        } else if(operator.value === 'on') {
+            return markerApply(marker, delegate.createForOnStatement(left, right, body));
         }
         return markerApply(marker, delegate.createForOfStatement(left, right, body));
     }
@@ -5641,7 +5657,7 @@ parseYieldExpression: true, parseAwaitExpression: true
     function parseFunctionDeclaration() {
         var id, body, token, tmp, firstRestricted, message, generator, isAsync,
             previousStrict, previousYieldAllowed, previousAwaitAllowed,
-            marker = markerCreate(), typeParameters;
+            previousObserverId, marker = markerCreate(), typeParameters;
 
         isAsync = false;
         if (matchAsync()) {
@@ -5690,6 +5706,8 @@ parseYieldExpression: true, parseAwaitExpression: true
         state.yieldAllowed = generator;
         previousAwaitAllowed = state.awaitAllowed;
         state.awaitAllowed = isAsync;
+        previousObserverId = state.observerId;
+        state.observerId = (previousObserverId || 0) + Number(isAsync === true);
 
         body = parseFunctionSourceElements();
 
@@ -5702,6 +5720,7 @@ parseYieldExpression: true, parseAwaitExpression: true
         strict = previousStrict;
         state.yieldAllowed = previousYieldAllowed;
         state.awaitAllowed = previousAwaitAllowed;
+        state.observerId   = previousObserverId;
 
         return markerApply(
             marker,
@@ -5723,7 +5742,7 @@ parseYieldExpression: true, parseAwaitExpression: true
     function parseFunctionExpression() {
         var token, id = null, firstRestricted, message, tmp, body, generator, isAsync,
             previousStrict, previousYieldAllowed, previousAwaitAllowed,
-            marker = markerCreate(), typeParameters;
+            previousObserverId, marker = markerCreate(), typeParameters;
 
         isAsync = false;
         if (matchAsync()) {
@@ -5776,6 +5795,8 @@ parseYieldExpression: true, parseAwaitExpression: true
         state.yieldAllowed = generator;
         previousAwaitAllowed = state.awaitAllowed;
         state.awaitAllowed = isAsync;
+        previousObserverId = state.observerId;
+        state.observerId = (previousObserverId || 0) + Number(isAsync === true);
 
         body = parseFunctionSourceElements();
 
@@ -5788,6 +5809,7 @@ parseYieldExpression: true, parseAwaitExpression: true
         strict = previousStrict;
         state.yieldAllowed = previousYieldAllowed;
         state.awaitAllowed = previousAwaitAllowed;
+        state.observerId   = previousObserverId;
 
         return markerApply(
             marker,
@@ -5810,7 +5832,7 @@ parseYieldExpression: true, parseAwaitExpression: true
         var delegateFlag, expr, marker = markerCreate();
 
         expectKeyword('yield', !strict);
-
+        
         delegateFlag = false;
         if (match('*')) {
             lex();
@@ -5819,14 +5841,23 @@ parseYieldExpression: true, parseAwaitExpression: true
 
         expr = parseAssignmentExpression();
 
-        return markerApply(marker, delegate.createYieldExpression(expr, delegateFlag));
+        return markerApply(marker, delegate.createYieldExpression(expr, delegateFlag, state.awaitAllowed, state.observerId));
     }
 
     function parseAwaitExpression() {
-        var expr, marker = markerCreate();
+        var expr, delegateFlag, marker = markerCreate();
+        
         expectContextualKeyword('await');
+        
+        delegateFlag = false;
+        if(match('*')) {
+            lex();
+            delegateFlag = true;
+        }
+        
         expr = parseAssignmentExpression();
-        return markerApply(marker, delegate.createAwaitExpression(expr));
+        
+        return markerApply(marker, delegate.createAwaitExpression(expr, delegateFlag, state.observerId));
     }
 
     // 14 Classes
